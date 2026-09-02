@@ -1,0 +1,112 @@
+openapi: 3.0.3
+info:
+  title: SIGA Reporting Analytics API
+  version: 1.1.0
+  description: Dashboard, KPIs, reports and read-only incremental exports over analytics read models.
+servers:
+  - url: /api/v1
+security:
+  - bearerAuth: []
+paths:
+  /dashboard:
+    get:
+      summary: Read operational health dashboard from projections
+      responses:
+        '200':
+          description: Dashboard
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/DashboardResponse' }
+  /reports:
+    post:
+      summary: Create report job
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/ReportRequest' }
+      responses:
+        '202':
+          description: Report accepted
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ReportJob' }
+  /reports/{id}:
+    get:
+      summary: Get report job/status
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        '200':
+          description: Report job
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ReportJob' }
+  /analytics/exports:
+    get:
+      summary: Read-only incremental export
+      parameters:
+        - { name: since, in: query, schema: { type: string } }
+        - { name: dataset, in: query, required: true, schema: { type: string, enum: [PRODUCTS, INVENTORY, MOVEMENTS] } }
+      responses:
+        '200':
+          description: Export page plus next checkpoint
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AnalyticsExport' }
+components:
+  securitySchemes:
+    bearerAuth: { type: http, scheme: bearer, bearerFormat: JWT }
+  schemas:
+    DashboardResponse:
+      type: object
+      properties:
+        stockValuePen: { type: number }
+        criticalStockPercent: { type: number }
+        entriesToday: { type: integer }
+        exitsToday: { type: integer }
+        lowStockCount: { type: integer }
+        outOfStockCount: { type: integer }
+        topCriticalProducts:
+          type: array
+          items:
+            type: object
+            properties:
+              productId: { type: string, format: uuid }
+              sku: { type: string }
+              quantity: { type: number }
+              minStock: { type: number }
+    ReportRequest:
+      type: object
+      required: [reportType, format]
+      properties:
+        reportType:
+          type: string
+          enum: [INVENTORY, KARDEX, ASSETS, LOTS_EXPIRY, MOVEMENTS, REPLENISHMENT, COST_CENTER_CONSUMPTION, ADJUSTMENTS, VALUATION, LOCATION, COUNT_ACCURACY]
+        format: { type: string, enum: [PDF, XLSX, CSV] }
+        persist: { type: boolean, default: false }
+        filters: { type: object, additionalProperties: true }
+    ReportJob:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        reportType: { type: string }
+        format: { type: string }
+        persistResult: { type: boolean }
+        status: { type: string, enum: [PENDING, RUNNING, COMPLETED, FAILED] }
+        objectKey: { type: string }
+        sha256: { type: string }
+        errorMessage: { type: string }
+        createdAt: { type: string, format: date-time }
+        completedAt: { type: string, format: date-time }
+    AnalyticsExport:
+      type: object
+      properties:
+        dataset: { type: string }
+        rows:
+          type: array
+          items: { type: object, additionalProperties: true }
+        nextCheckpoint: { type: string }
