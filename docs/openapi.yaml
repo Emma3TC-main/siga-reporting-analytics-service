@@ -1,8 +1,11 @@
 openapi: 3.0.3
 info:
   title: SIGA Reporting Analytics API
-  version: 1.1.0
-  description: Dashboard, KPIs, reports and read-only incremental exports over analytics read models.
+  version: 1.2.0
+  description: >-
+    Operational dashboard and read-only reports over eventually consistent analytics
+    projections. Instants are RFC 3339 UTC; business periods use America/Lima,
+    with inclusive from and exclusive to boundaries.
 servers:
   - url: /api/v1
 security:
@@ -10,103 +13,315 @@ security:
 paths:
   /dashboard:
     get:
-      summary: Read operational health dashboard from projections
+      summary: Read operational KPI and movement trend
+      description: Requires REPORT_READ. Values reflect the dataUpdatedAt projection cutoff, not authoritative real-time stock.
+      x-required-permission: REPORT_READ
+      parameters:
+        - $ref: '#/components/parameters/From'
+        - $ref: '#/components/parameters/To'
+        - name: bucket
+          in: query
+          description: Business-period bucket using America/Lima boundaries.
+          schema: { type: string, enum: [DAY, MONTH], default: DAY }
       responses:
         '200':
-          description: Dashboard
+          description: Dashboard for the requested business period
           content:
             application/json:
               schema: { $ref: '#/components/schemas/DashboardResponse' }
-  /reports:
-    post:
-      summary: Create report job
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema: { $ref: '#/components/schemas/ReportRequest' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+  /reports/movements:
+    get:
+      summary: List confirmed movements for a period
+      description: Requires REPORT_READ. Fixed order is confirmedAt DESC, movementId DESC.
+      x-required-permission: REPORT_READ
+      parameters:
+        - $ref: '#/components/parameters/From'
+        - $ref: '#/components/parameters/To'
+        - name: movementType
+          in: query
+          schema: { $ref: '#/components/schemas/MovementType' }
+        - name: costCenterCode
+          in: query
+          schema: { type: string, maxLength: 80 }
+        - $ref: '#/components/parameters/Page'
+        - $ref: '#/components/parameters/Size'
       responses:
-        '202':
-          description: Report accepted
+        '200':
+          description: Confirmed movement page
           content:
             application/json:
-              schema: { $ref: '#/components/schemas/ReportJob' }
-  /reports/{id}:
+              schema: { $ref: '#/components/schemas/MovementReportPage' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+  /reports/inventory-valuation:
     get:
-      summary: Get report job/status
+      summary: List current projected inventory valuation
+      description: Requires REPORT_READ. Fixed order is stockValuePen DESC, stockBalanceId ASC.
+      x-required-permission: REPORT_READ
       parameters:
-        - name: id
-          in: path
-          required: true
+        - name: productId
+          in: query
           schema: { type: string, format: uuid }
+        - name: categoryCode
+          in: query
+          schema: { type: string, maxLength: 50 }
+        - name: locationId
+          in: query
+          schema: { type: string, format: uuid }
+        - $ref: '#/components/parameters/Page'
+        - $ref: '#/components/parameters/Size'
       responses:
         '200':
-          description: Report job
+          description: Current projected inventory valuation page
           content:
             application/json:
-              schema: { $ref: '#/components/schemas/ReportJob' }
-  /analytics/exports:
+              schema: { $ref: '#/components/schemas/InventoryValuationPage' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+  /reports/adjustments:
     get:
-      summary: Read-only incremental export
+      summary: List confirmed inventory adjustments for a period
+      description: Requires REPORT_READ. Fixed order is confirmedAt DESC, movementId DESC.
+      x-required-permission: REPORT_READ
       parameters:
-        - { name: since, in: query, schema: { type: string } }
-        - { name: dataset, in: query, required: true, schema: { type: string, enum: [PRODUCTS, INVENTORY, MOVEMENTS] } }
+        - $ref: '#/components/parameters/From'
+        - $ref: '#/components/parameters/To'
+        - name: adjustmentType
+          in: query
+          schema:
+            type: string
+            enum: [ADJUST_POSITIVE, ADJUST_NEGATIVE]
+        - $ref: '#/components/parameters/Page'
+        - $ref: '#/components/parameters/Size'
       responses:
         '200':
-          description: Export page plus next checkpoint
+          description: Confirmed adjustment page
           content:
             application/json:
-              schema: { $ref: '#/components/schemas/AnalyticsExport' }
+              schema: { $ref: '#/components/schemas/AdjustmentReportPage' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+  /admin/reconciliation:
+    post:
+      summary: Reconcile Reporting projections from canonical read APIs
+      description: >-
+        Requires REPORT_READ, CATALOG_READ and INVENTORY_READ. The caller bearer is
+        forwarded only to Catalog and Inventory APIs and is never persisted. The
+        operation stages all pages and replaces projections only after a complete sweep.
+      x-required-permissions: [REPORT_READ, CATALOG_READ, INVENTORY_READ]
+      responses:
+        '200':
+          description: Reconciliation completed
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ReconciliationResponse' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '409':
+          description: Another reconciliation is active
+          content:
+            application/problem+json:
+              schema: { $ref: '#/components/schemas/ProblemDetail' }
+        '502':
+          description: A canonical source API failed; active projections were preserved
+          content:
+            application/problem+json:
+              schema: { $ref: '#/components/schemas/ProblemDetail' }
 components:
   securitySchemes:
     bearerAuth: { type: http, scheme: bearer, bearerFormat: JWT }
+  parameters:
+    From:
+      name: from
+      in: query
+      required: true
+      description: Inclusive UTC instant. Business boundaries are interpreted in America/Lima before conversion.
+      schema: { type: string, format: date-time }
+    To:
+      name: to
+      in: query
+      required: true
+      description: Exclusive UTC instant; must be greater than from.
+      schema: { type: string, format: date-time }
+    Page:
+      name: page
+      in: query
+      schema: { type: integer, default: 0, minimum: 0 }
+    Size:
+      name: size
+      in: query
+      schema: { type: integer, default: 20, minimum: 1, maximum: 100 }
+  responses:
+    BadRequest:
+      description: Invalid query parameters or period
+      content:
+        application/problem+json:
+          schema: { $ref: '#/components/schemas/ProblemDetail' }
+    Unauthorized:
+      description: Missing or invalid JWT
+      content:
+        application/problem+json:
+          schema: { $ref: '#/components/schemas/ProblemDetail' }
+    Forbidden:
+      description: Authenticated principal lacks the required permission
+      content:
+        application/problem+json:
+          schema: { $ref: '#/components/schemas/ProblemDetail' }
   schemas:
+    MovementType:
+      type: string
+      enum: [ENTRY, EXIT, TRANSFER, ADJUST_POSITIVE, ADJUST_NEGATIVE]
+    Period:
+      type: object
+      required: [from, to, timeZone]
+      properties:
+        from: { type: string, format: date-time }
+        to: { type: string, format: date-time }
+        timeZone: { type: string, enum: [America/Lima] }
+    MovementTrendBucket:
+      type: object
+      required: [periodStart, entries, exits, transfers, positiveAdjustments, negativeAdjustments]
+      properties:
+        periodStart: { type: string, format: date-time }
+        entries: { type: integer, format: int64, minimum: 0 }
+        exits: { type: integer, format: int64, minimum: 0 }
+        transfers: { type: integer, format: int64, minimum: 0 }
+        positiveAdjustments: { type: integer, format: int64, minimum: 0 }
+        negativeAdjustments: { type: integer, format: int64, minimum: 0 }
+    CriticalProduct:
+      type: object
+      required: [productId, sku, name, quantity, minStock, deficit]
+      properties:
+        productId: { type: string, format: uuid }
+        sku: { type: string }
+        name: { type: string }
+        categoryCode: { type: string, nullable: true }
+        quantity: { type: number, multipleOf: 0.000001 }
+        minStock: { type: number, multipleOf: 0.000001 }
+        deficit: { type: number, minimum: 0, multipleOf: 0.000001 }
     DashboardResponse:
       type: object
+      required: [period, dataUpdatedAt, stockValuePen, lowStockProductCount, outOfStockProductCount, confirmedMovementCount, entryCount, exitCount, transferCount, positiveAdjustmentCount, negativeAdjustmentCount, movementTrend, topCriticalProducts]
       properties:
-        stockValuePen: { type: number }
-        criticalStockPercent: { type: number }
-        entriesToday: { type: integer }
-        exitsToday: { type: integer }
-        lowStockCount: { type: integer }
-        outOfStockCount: { type: integer }
+        period: { $ref: '#/components/schemas/Period' }
+        dataUpdatedAt: { type: string, format: date-time, nullable: true }
+        stockValuePen: { type: number, multipleOf: 0.000001 }
+        lowStockProductCount: { type: integer, format: int64, minimum: 0 }
+        outOfStockProductCount: { type: integer, format: int64, minimum: 0 }
+        confirmedMovementCount: { type: integer, format: int64, minimum: 0 }
+        entryCount: { type: integer, format: int64, minimum: 0 }
+        exitCount: { type: integer, format: int64, minimum: 0 }
+        transferCount: { type: integer, format: int64, minimum: 0 }
+        positiveAdjustmentCount: { type: integer, format: int64, minimum: 0 }
+        negativeAdjustmentCount: { type: integer, format: int64, minimum: 0 }
+        movementTrend:
+          type: array
+          items: { $ref: '#/components/schemas/MovementTrendBucket' }
         topCriticalProducts:
           type: array
-          items:
-            type: object
-            properties:
-              productId: { type: string, format: uuid }
-              sku: { type: string }
-              quantity: { type: number }
-              minStock: { type: number }
-    ReportRequest:
+          maxItems: 10
+          items: { $ref: '#/components/schemas/CriticalProduct' }
+    MovementReportItem:
       type: object
-      required: [reportType, format]
+      required: [movementId, movementCode, movementType, status, registeredByUserId, confirmedByUserId, sensitive, totalBaseCostPen, confirmedAt]
       properties:
-        reportType:
-          type: string
-          enum: [INVENTORY, KARDEX, ASSETS, LOTS_EXPIRY, MOVEMENTS, REPLENISHMENT, COST_CENTER_CONSUMPTION, ADJUSTMENTS, VALUATION, LOCATION, COUNT_ACCURACY]
-        format: { type: string, enum: [PDF, XLSX, CSV] }
-        persist: { type: boolean, default: false }
-        filters: { type: object, additionalProperties: true }
-    ReportJob:
+        movementId: { type: string, format: uuid }
+        movementCode: { type: string }
+        movementType: { $ref: '#/components/schemas/MovementType' }
+        status: { type: string, enum: [CONFIRMED] }
+        registeredByUserId: { type: string, format: uuid }
+        confirmedByUserId: { type: string, format: uuid }
+        authorizedByUserId: { type: string, format: uuid, nullable: true }
+        requestedByUserId: { type: string, format: uuid, nullable: true }
+        costCenterCode: { type: string, nullable: true }
+        costCenterNameSnapshot: { type: string, nullable: true }
+        supplierId: { type: string, format: uuid, nullable: true }
+        supplierNameSnapshot: { type: string, nullable: true }
+        referenceDocType: { type: string, nullable: true }
+        referenceDocNumber: { type: string, nullable: true }
+        reason: { type: string, nullable: true }
+        sensitive: { type: boolean }
+        totalBaseCostPen: { type: number, multipleOf: 0.000001 }
+        confirmedAt: { type: string, format: date-time }
+    InventoryValuationItem:
       type: object
+      required: [stockBalanceId, productId, sku, name, productType, locationId, quantity, avgCostPen, stockValuePen, minStock]
       properties:
-        id: { type: string, format: uuid }
-        reportType: { type: string }
-        format: { type: string }
-        persistResult: { type: boolean }
-        status: { type: string, enum: [PENDING, RUNNING, COMPLETED, FAILED] }
-        objectKey: { type: string }
-        sha256: { type: string }
-        errorMessage: { type: string }
-        createdAt: { type: string, format: date-time }
-        completedAt: { type: string, format: date-time }
-    AnalyticsExport:
+        stockBalanceId: { type: string, format: uuid }
+        productId: { type: string, format: uuid }
+        sku: { type: string }
+        name: { type: string }
+        categoryCode: { type: string, nullable: true }
+        categoryName: { type: string, nullable: true }
+        productType: { type: string }
+        locationId: { type: string, format: uuid }
+        lotId: { type: string, format: uuid, nullable: true }
+        assetId: { type: string, format: uuid, nullable: true }
+        quantity: { type: number, multipleOf: 0.000001 }
+        avgCostPen: { type: number, multipleOf: 0.000001 }
+        stockValuePen: { type: number, multipleOf: 0.000001 }
+        minStock: { type: number, multipleOf: 0.000001 }
+    AdjustmentReportItem:
+      allOf:
+        - $ref: '#/components/schemas/MovementReportItem'
+        - type: object
+          required: [movementType]
+          properties:
+            movementType:
+              type: string
+              enum: [ADJUST_POSITIVE, ADJUST_NEGATIVE]
+    MovementReportPage:
       type: object
+      required: [content, page, size, totalElements, totalPages, period, dataUpdatedAt]
       properties:
-        dataset: { type: string }
-        rows:
-          type: array
-          items: { type: object, additionalProperties: true }
-        nextCheckpoint: { type: string }
+        content: { type: array, items: { $ref: '#/components/schemas/MovementReportItem' } }
+        period: { $ref: '#/components/schemas/Period' }
+        dataUpdatedAt: { type: string, format: date-time, nullable: true }
+        page: { type: integer, minimum: 0 }
+        size: { type: integer, minimum: 1, maximum: 100 }
+        totalElements: { type: integer, format: int64, minimum: 0 }
+        totalPages: { type: integer, minimum: 0 }
+    AdjustmentReportPage:
+      type: object
+      required: [content, page, size, totalElements, totalPages, period, dataUpdatedAt]
+      properties:
+        content: { type: array, items: { $ref: '#/components/schemas/AdjustmentReportItem' } }
+        period: { $ref: '#/components/schemas/Period' }
+        dataUpdatedAt: { type: string, format: date-time, nullable: true }
+        page: { type: integer, minimum: 0 }
+        size: { type: integer, minimum: 1, maximum: 100 }
+        totalElements: { type: integer, format: int64, minimum: 0 }
+        totalPages: { type: integer, minimum: 0 }
+    InventoryValuationPage:
+      type: object
+      required: [content, page, size, totalElements, totalPages, dataUpdatedAt]
+      properties:
+        content: { type: array, items: { $ref: '#/components/schemas/InventoryValuationItem' } }
+        dataUpdatedAt: { type: string, format: date-time, nullable: true }
+        page: { type: integer, minimum: 0 }
+        size: { type: integer, minimum: 1, maximum: 100 }
+        totalElements: { type: integer, format: int64, minimum: 0 }
+        totalPages: { type: integer, minimum: 0 }
+    ReconciliationResponse:
+      type: object
+      required: [productsReconciled, stockBalancesReconciled, dataUpdatedAt]
+      properties:
+        productsReconciled: { type: integer, format: int64, minimum: 0 }
+        stockBalancesReconciled: { type: integer, format: int64, minimum: 0 }
+        dataUpdatedAt: { type: string, format: date-time }
+    ProblemDetail:
+      type: object
+      required: [type, title, status, detail, code]
+      properties:
+        type: { type: string, format: uri }
+        title: { type: string }
+        status: { type: integer }
+        detail: { type: string }
+        code: { type: string }
+        correlationId: { type: string, format: uuid }

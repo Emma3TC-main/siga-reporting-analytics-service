@@ -1,0 +1,4 @@
+# Development profile intentionally contains no credentials.
+reporting:
+  consumer:
+    enabled: ${REPORTING_CONSUMER_ENABLED:false}

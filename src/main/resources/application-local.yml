@@ -1,20 +1,4 @@
-spring:
-  datasource:
-    url: jdbc:postgresql://localhost:5432/siga
-    username: siga_analytics
-    password: siga_analytics
-  
-  rabbitmq:
-    host: localhost
-    port: 5672
-    username: siga_mq
-    password: siga_mq_secret
-
-  data:
-    redis:
-      host: localhost
-      port: 6379
-
-# Configuración JWT (Apunta a las llaves que generaste)
-jwt:
-  public-key: file:../../siga-infrastructure/secrets/jwt_public.pem
+# Local profile intentionally contains no credentials. Use REPORTING_* environment variables.
+reporting:
+  consumer:
+    enabled: ${REPORTING_CONSUMER_ENABLED:false}

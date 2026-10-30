@@ -1,0 +1,56 @@
+server:
+  address: 127.0.0.1
+  port: ${REPORTING_PORT:8086}
+
+spring:
+  application:
+    name: siga-reporting-analytics-service
+  datasource:
+    url: ${REPORTING_DB_URL}
+    username: ${REPORTING_DB_USER}
+    password: ${REPORTING_DB_PASSWORD}
+  flyway:
+    schemas: analytics
+    default-schema: analytics
+    create-schemas: true
+    clean-disabled: true
+  rabbitmq:
+    host: ${REPORTING_RABBIT_HOST:127.0.0.1}
+    port: ${REPORTING_RABBIT_PORT:5672}
+    username: ${REPORTING_RABBIT_USER}
+    password: ${REPORTING_RABBIT_PASSWORD}
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health
+  endpoint:
+    health:
+      show-details: never
+      probes:
+        enabled: true
+      group:
+        readiness:
+          include: readinessState,db
+
+reporting:
+  security:
+    jwks-uri: ${REPORTING_JWKS_URI:http://127.0.0.1:8081/.well-known/jwks.json}
+    issuer: ${REPORTING_JWT_ISSUER:siga-identity}
+    audience: ${REPORTING_JWT_AUDIENCE:siga-api}
+  sources:
+    catalog-base-url: ${REPORTING_CATALOG_BASE_URL:http://127.0.0.1:8082/api/v1}
+    inventory-base-url: ${REPORTING_INVENTORY_BASE_URL:http://127.0.0.1:8083/api/v1}
+    page-size: ${REPORTING_RECONCILIATION_PAGE_SIZE:100}
+  consumer:
+    enabled: ${REPORTING_CONSUMER_ENABLED:false}
+    exchange: ${REPORTING_EXCHANGE:siga.events}
+    queue: ${REPORTING_QUEUE:reporting.projections.v1}
+    movement-routing-key: ${REPORTING_MOVEMENT_ROUTING_KEY:inventory.movement.confirmed.v1}
+    product-routing-key: ${REPORTING_PRODUCT_ROUTING_KEY:catalog.product.updated.v1}
+    retry:
+      max-attempts: ${REPORTING_RETRY_MAX_ATTEMPTS:3}
+      initial-interval-ms: ${REPORTING_RETRY_INITIAL_MS:250}
+      multiplier: ${REPORTING_RETRY_MULTIPLIER:2.0}
+      max-interval-ms: ${REPORTING_RETRY_MAX_MS:2000}
